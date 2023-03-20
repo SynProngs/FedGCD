@@ -68,9 +68,10 @@ class Server:
 
     def calculate_weights(self, W, community_indices):
         community_weights = W[community_indices]
-        normalized_weights = community_weights / np.sum(community_weights, axis=1, keepdims=True)
-        return normalized_weights
-
+        normalized_scores = community_weights / np.sum(community_weights, axis=1, keepdims=True)
+        client_weights = np.dot(normalized_scores, self.community_weights)
+        return client_weights
+    
     def weighted_average(self, client_models, weights):
         avg = client_models[0].copy()
         for key in avg.keys():
