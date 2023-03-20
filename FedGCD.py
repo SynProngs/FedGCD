@@ -54,7 +54,7 @@ class Server:
                 adjacency_matrix[i, j] = torch.tensor([torch.norm(client_weights[i][key] - client_weights[j][key]).item() for key in client_weights[i].keys()]).sum().item()
         return adjacency_matrix
 
-    def find_optimal_num_communities(self, adjacency_matrix, max_communities=10):
+    def find_optimal_num_communities(self, adjacency_matrix, max_communities=):
         best_aic = float("inf")
         best_num_communities = 1
         num_samples = adjacency_matrix.shape[0]
@@ -74,9 +74,9 @@ class Server:
 
         return best_num_communities
 
-    def detect_communities(self, clients):
+    def detect_communities(self, clients, max_communities):
         adjacency_matrix = self.create_adjacency_matrix(clients)
-        num_communities = self.find_optimal_num_communities(adjacency_matrix)
+        num_communities = self.find_optimal_num_communities(adjacency_matrix, max_communities)
         model = NMF(n_components=num_communities, init='random', random_state=0)
         W = model.fit_transform(adjacency_matrix)
         H = model.components_
@@ -131,7 +131,7 @@ def load_femnist_data(num_clients):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_clients = 100
-    num_communities = 2
+    max_communities = 2
     num_rounds = 200
     clustering_interval = 50
     performance_interval = 10
@@ -159,7 +159,7 @@ def main():
 
         # Cluster clients and apply FedAvg every clustering_interval rounds
         if round % clustering_interval == 1:
-            community_labels, W = server.detect_communities(clients)
+            community_labels, W = server.detect_communities(clients,max_communities)
             server.federated_averaging(clients, community_labels, W)
 
         # Output performance every performance_interval rounds
