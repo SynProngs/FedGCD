@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.cluster import KMeans
 from sklearn.decomposition import NMF
+from sklearn.metrics import mean_squared_error
+from math import log
 import numpy as np
 from leaf.dataloader import FEMNISTDataset
 from torch.utils.data import DataLoader
@@ -33,12 +35,15 @@ class Client:
         self.model.load_state_dict(new_state_dict)
 
 class Server:
-    def __init__(self, num_clients, model, device, num_communities=2):
+    def __init__(self, num_clients, model, device, initial_community_weights=None):
         self.num_clients = num_clients
         self.model = model
         self.device = device
-        self.communities = num_communities
         self.client_models = [model.state_dict() for _ in range(self.num_clients)]
+        if initial_community_weights is not None:
+            self.community_weights = initial_community_weights
+        else:
+            self.community_weights = np.ones(num_clients)
 
     def create_adjacency_matrix(self, clients):
         client_weights = [client.send_model() for client in clients]
@@ -49,16 +54,38 @@ class Server:
                 adjacency_matrix[i, j] = torch.tensor([torch.norm(client_weights[i][key] - client_weights[j][key]).item() for key in client_weights[i].keys()]).sum().item()
         return adjacency_matrix
 
+    def find_optimal_num_communities(self, adjacency_matrix, max_communities=10):
+        best_aic = float("inf")
+        best_num_communities = 1
+        num_samples = adjacency_matrix.shape[0]
+
+        for n in range(1, max_communities + 1):
+            nmf_model = NMF(n_components=n, init='random', random_state=0)
+            W = nmf_model.fit_transform(adjacency_matrix)
+            H = nmf_model.components_
+            reconstructed_matrix = np.dot(W, H)
+            mse = mean_squared_error(adjacency_matrix, reconstructed_matrix)
+            k = n * (num_samples + 1)
+            aic = num_samples * log(mse) + 2 * k
+
+            if aic < best_aic:
+                best_aic = aic
+                best_num_communities = n
+
+        return best_num_communities
+
     def detect_communities(self, clients):
         adjacency_matrix = self.create_adjacency_matrix(clients)
-        model = NMF(n_components=self.communities, init='random', random_state=0)
+        num_communities = self.find_optimal_num_communities(adjacency_matrix)
+        model = NMF(n_components=num_communities, init='random', random_state=0)
         W = model.fit_transform(adjacency_matrix)
         H = model.components_
-        kmeans = KMeans(n_clusters=self.communities, random_state=0).fit(W)
+        kmeans = KMeans(n_clusters=num_communities, random_state=0).fit(W)
         return kmeans.labels_, W
 
     def federated_averaging(self, clients, community_labels, W):
-        for community in range(self.communities):
+        num_communities = np.unique(community_labels).shape[0]
+        for community in range(num_communities):
             community_indices = [i for i, label in enumerate(community_labels) if label == community]
             community_client_models = [clients[i].send_model() for i in community_indices]
             community_weights = self.calculate_weights(W, community_indices)
@@ -71,7 +98,7 @@ class Server:
         normalized_scores = community_weights / np.sum(community_weights, axis=1, keepdims=True)
         client_weights = np.dot(normalized_scores, self.community_weights)
         return client_weights
-    
+
     def weighted_average(self, client_models, weights):
         avg = client_models[0].copy()
         for key in avg.keys():
@@ -120,7 +147,7 @@ def main():
     clients = [Client(client_dataloaders[i], model, device) for i in range(num_clients)]
 
     # Initialize the server
-    server = Server(num_clients, model, device, num_communities)
+    server = Server(num_clients, model, device, num_communities, initial_community_weights=first_learning_weights)
 
     # Federated learning process
     for round in range(1, num_rounds + 1):
